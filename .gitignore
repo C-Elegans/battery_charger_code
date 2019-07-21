@@ -1,0 +1,9 @@
+build/
+debug/
+dist/
+*~
+*.bak
+*.i
+*.d
+*.o
+.frama-c
