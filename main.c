@@ -24,6 +24,9 @@
 
 // #pragma config statements should precede project file includes.
 // Use project enums instead of #define for ON and OFF.
+#ifdef __FRAMAC__
+#define __bit char
+#endif
 
 #include <xc.h>
 #include <stdint.h>
@@ -50,18 +53,45 @@ void init_adc(void){
     ADCON0bits.ADON = 1;
 }
 
+/*@
+assigns ADCON0bits;
+*/
 uint16_t read_adc(uint8_t pin){
     ADCON0bits.CHS = pin;
-    for(uint8_t i=0; i<32; i++){
-        __asm__ volatile("nop");
+    uint8_t i=0;
+    /*@ loop invariant 0 <= i <= 32;
+      loop assigns i;
+      loop variant 32 - i;
+     */
+    for(; i<32; i++){
+      __asm__ volatile("nop":::);
     }
     ADCON0bits.GO = 1;
-    while(ADCON0bits.GO == 1){}
-    return ADRESH << 8 | ADRESL;
+    uint16_t j = 0;
+    /*@ loop invariant 0 <= j <= 1024;
+      loop assigns j;
+      loop variant 1024 - j;
+     */
+#ifdef __FRAMAC__
+    while(ADCON0bits.GO == 1 && j < 1024){
+      j++;
+    }
+#else
+    while(ADCON0bits.GO == 1) {}
+#endif
+    return (ADRESH & 0x03) << 8 | ADRESL;
 }
 
-void update_boost(void){
-    uint16_t boost_voltage = read_adc(BOOST_SENSE_ADC);
+/*@
+  ensures (boost_voltage < BOOST_THRESHOLD && PWM1DCL < BOOST_DCL_MAX) ==>
+                PWM1DCL >= \old(PWM1DCL);
+  ensures (boost_voltage > BOOST_THRESHOLD && PWM1DCL > 5) ==>
+                PWM1DCL <= \old(PWM1DCL);
+  ensures 5 < \old(PWM1DCL) < BOOST_DCL_MAX ==>
+          0 <= PWM1DCL <= BOOST_DCL_MAX;
+  assigns PWM1DCL, PWM1LDCONbits; 
+*/
+void update_boost(uint16_t boost_voltage){
     if(boost_voltage < BOOST_THRESHOLD && PWM1DCL < BOOST_DCL_MAX){
        PWM1DCL += 1;
        
@@ -71,25 +101,27 @@ void update_boost(void){
     }
     PWM1LDCONbits.LDA = 1;
 }
+
 uint16_t buck_counter = 63;
-void update_buck(void){
-    uint16_t buck_voltage = read_adc(BATT_SENSE_ADC);
-    uint16_t current_sense = read_adc(ISENSE_ADC);
+
+/*@ 
+     
+  assigns PWM2DCL, PWM2LDCONbits, ADCON0bits;
+  ensures (buck_voltage < BATT_THRESHOLD && current_sense < CURRENT_THRESHOLD) ==> PWM2DCL >= \old(PWM2DCL);
+  ensures (buck_voltage > BATT_THRESHOLD || current_sense > CURRENT_THRESHOLD) ==> PWM2DCL <= \old(PWM2DCL);
+*/
+void update_buck(uint16_t buck_voltage, uint16_t current_sense){
     if(buck_voltage < BATT_THRESHOLD && PWM2DCL < BUCK_DCL_MAX && current_sense < CURRENT_THRESHOLD){
-        buck_counter += 1;
+        PWM2DCL += 1;
     }
-    if((buck_voltage > BATT_THRESHOLD || current_sense > CURRENT_THRESHOLD) && PWM2DCL > 0){
-        buck_counter -= 1;
+    else if((buck_voltage > BATT_THRESHOLD || current_sense > CURRENT_THRESHOLD) && PWM2DCL > 0){
+        PWM2DCL -= 1;
     }
-    PWM2DCL = buck_counter;
     PWM2LDCONbits.LDA = 1;
-    
 }
 
-void setup_clock(void){
-    OSCCONbits.SPLLEN = 1;
-    OSCCONbits.IRCF = 0x0e; // 32MHz oscillator
-}
+unsigned char dummy = 5;
+
 void main(void) {
     setup_clock();
     init_adc();
@@ -101,8 +133,11 @@ void main(void) {
     init_pwm2();
     setup_pps();
     while(1) {
-        update_boost();
-        update_buck();
+        uint16_t boost_voltage = read_adc(BOOST_SENSE_ADC);
+	uint16_t buck_voltage = read_adc(BATT_SENSE_ADC);
+	uint16_t current_sense = read_adc(ISENSE_ADC);
+	update_boost(boost_voltage);
+        update_buck(buck_voltage, current_sense);
     }
     return;
 }

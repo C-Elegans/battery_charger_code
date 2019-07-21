@@ -25,3 +25,7 @@ void setup_pps(void){
     RC0PPS = 0x04; //PWM2
     lock_pps();
 }
+void setup_clock(void){
+    OSCCONbits.SPLLEN = 1;
+    OSCCONbits.IRCF = 0x0e; // 32MHz oscillator
+}
